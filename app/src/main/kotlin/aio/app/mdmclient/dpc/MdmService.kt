@@ -37,6 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.random.Random
 import org.json.JSONArray
 import org.json.JSONObject
@@ -331,6 +332,13 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
             delay(15_000L) // let enrolment and the first check-in settle
             while (isActive && wantConnected) {
                 try {
+                    // A dial that hung (no timeout on the TLS handshake) never reports back, so
+                    // nothing else would ever redial: cancel it and start over.
+                    if (ws.isStuckDialing()) {
+                        Log.w(TAG, "WS dial hung — cancelling and redialling")
+                        ws.cancel()
+                        withContext(Dispatchers.Main) { connectWs() }
+                    }
                     val nudged = pollCommandsNow.getAndSet(false)
                     // An open socket is not proof that frames arrive: a half-open one reads
                     // as open and swallows every wake, which is exactly how a device ends up

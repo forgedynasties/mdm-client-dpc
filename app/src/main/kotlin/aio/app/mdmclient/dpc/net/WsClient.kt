@@ -1,5 +1,6 @@
 package aio.app.mdmclient.dpc.net
 
+import android.os.SystemClock
 import android.util.Log
 import aio.app.mdmclient.dpc.AgentConfig
 import okhttp3.OkHttpClient
@@ -37,13 +38,35 @@ class WsClient(
     @Volatile var isOpen: Boolean = false
         private set
 
+    // When the current dial started (0 once it opened or reported). OkHttp's connectTimeout
+    // covers the TCP connect only; with readTimeout 0 a TLS handshake or upgrade reply that
+    // loses the network waits forever and reports neither onOpen nor onFailure, so nothing
+    // ever reconnects (ADRB0AASI00006 and 16 lab T7s, Wi-Fi blip 30 Oct 2026, 03:10 UTC).
+    @Volatile private var dialStartedAt = 0L
+
+    /** A dial has been going far longer than any dial takes: the service cancels and redials. */
+    fun isStuckDialing(): Boolean {
+        val t = dialStartedAt
+        return t != 0L && !isOpen && SystemClock.elapsedRealtime() - t > DIAL_STUCK_MS
+    }
+
+    /** Abandon whatever this socket is doing (a hung dial included) without a close handshake. */
+    fun cancel() {
+        isOpen = false
+        dialStartedAt = 0L
+        webSocket?.cancel()
+        webSocket = null
+    }
+
     fun connect(serial: String) {
         val req = Request.Builder()
             .url(config.wsUrl(serial))
             .header("X-API-Key", config.apiKey)
             .build()
+        dialStartedAt = SystemClock.elapsedRealtime()
         webSocket = http.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                dialStartedAt = 0L
                 isOpen = true
                 Log.i(TAG, "WS open")
                 listener.onOpen()
@@ -66,11 +89,13 @@ class WsClient(
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                dialStartedAt = 0L
                 isOpen = false
                 listener.onClosed("closed $code $reason", code)
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                dialStartedAt = 0L
                 isOpen = false
                 Log.w(TAG, "WS failure: ${t.message}")
                 listener.onClosed("failure ${t.message}", 0)
@@ -90,5 +115,6 @@ class WsClient(
 
     companion object {
         private const val TAG = "WsClient"
+        private const val DIAL_STUCK_MS = 60_000L
     }
 }
