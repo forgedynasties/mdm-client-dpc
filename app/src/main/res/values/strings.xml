@@ -16,6 +16,16 @@
     <string name="card_capabilities">What the MDM can do here</string>
     <string name="card_capabilities_sub">Green is fully available. Amber works with limits on this device.</string>
     <string name="card_privacy">What your organization can see</string>
+    <string name="card_group">Group</string>
+    <string name="badge_brand">AIO MDM · Standard client</string>
+    <string name="badge_serial">Serial</string>
+    <string name="badge_qr">Scan to open this device on the dashboard</string>
+    <string name="card_connection">Connection</string>
+    <string name="card_health">Health</string>
+    <string name="card_lock">Lock &amp; policies</string>
+    <string name="action_details">Details</string>
+    <string name="action_hide_details">Hide details</string>
+    <string name="action_change">Change</string>
 
     <string name="setup_do_title">Make AIO MDM the device owner</string>
     <string name="setup_do_body">Device owner is what lets AIO MDM lock the device to kiosk, install apps silently and apply policy. It can only be set on a freshly reset device with no accounts on it: scan the AIO enrollment QR code during setup (tap the welcome screen six times to open the scanner), or over adb:</string>

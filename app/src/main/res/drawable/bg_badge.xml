@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- S3: the device's ID badge, the brand's violet into coral -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient android:angle="315" android:startColor="#2A1D4F" android:centerColor="#5B2D6E" android:endColor="#C2462C" />
+    <corners android:radius="22dp" />
+</shape>

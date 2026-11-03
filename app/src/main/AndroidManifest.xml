@@ -81,6 +81,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Lab devices: pick this device's group (G3, 3 Nov 2026) -->
+        <activity
+            android:name=".ui.GroupPickActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MdmAgent" />
+
         <!-- Managed provisioning (QR / zero-touch) on Android 12+: the setup wizard asks
              the DPC for its provisioning mode, then hands over for policy compliance
              once it is Device Owner. Both return at once; there is no on-device UI. -->

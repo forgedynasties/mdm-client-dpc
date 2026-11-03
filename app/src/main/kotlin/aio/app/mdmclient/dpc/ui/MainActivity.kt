@@ -74,6 +74,10 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* best-effort */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // A TV box sits on a dark screen in a dim room: the dark theme there (S3, 3 Nov 2026).
+        if (packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+            delegate.localNightMode = androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+        }
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -86,6 +90,14 @@ class MainActivity : AppCompatActivity() {
         binding.buttonSettings.setOnClickListener {
             runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) }
         }
+        binding.buttonGroup.setOnClickListener { GroupPickActivity.open(this, ask = false) }
+        binding.buttonDetails.setOnClickListener {
+            val show = binding.columns.visibility != View.VISIBLE
+            binding.columns.visibility = if (show) View.VISIBLE else View.GONE
+            binding.buttonDetails.text = getString(if (show) R.string.action_hide_details else R.string.action_details)
+            if (show) binding.scroll.post { binding.scroll.smoothScrollTo(0, binding.columns.top) }
+        }
+        askGroupOnce = savedInstanceState == null
         binding.footer.text = "AIO MDM agent ${BuildConfig.VERSION_NAME} · aioapp.com"
         binding.buttonCheckin.requestFocus()
 
@@ -139,6 +151,58 @@ class MainActivity : AppCompatActivity() {
         }
         rendered.clear() // grants and policy may have changed while away
         ui.post(tick)
+        loadGroup()
+    }
+
+    // ── Group (G3, picked 3 Nov 2026) ──────────────────────────────────────────────
+    // A Lab device shows its group in a card with Change; while it has none, opening the app
+    // opens the picker once ("Which team is this device for?", Not now). At a venue, or before
+    // enrollment, the card stays hidden.
+
+    /** Ask for a group on this launch of the screen (not on every resume, so Not now sticks). */
+    private var askGroupOnce = false
+
+    /** The device's role as the MDM names it ("POS terminal"), for the badge; "" until known. */
+    private var role = ""
+
+    /** The QR's link, so it is drawn again only when the server or serial changes. */
+    private var qrFor = ""
+
+    private fun loadGroup() {
+        if (!config.isConfigured) { binding.groupCard.visibility = View.GONE; return }
+        val ctx = applicationContext
+        Thread {
+            val answer = aio.app.mdmclient.dpc.net.ApiClient(AgentConfig.get(ctx))
+                .postForAnswer("/api/v1/device-group", JSONObject().put("serial", DeviceIdentity.serial(ctx)), 15)
+            ui.post {
+                if (isFinishing || isDestroyed) return@post
+                val b = answer.body ?: return@post
+                role = b.optString("role")
+                val venue = b.optString("venue")
+                val cur = b.optJSONObject("current")
+                when {
+                    b.optBoolean("lab") -> {
+                        binding.groupCard.visibility = View.VISIBLE
+                        binding.groupSub.text = "Lab · group"
+                        binding.groupName.text = cur?.optString("name") ?: "No group yet"
+                        binding.buttonGroup.visibility = View.VISIBLE
+                        binding.buttonGroup.text = if (cur != null) getString(R.string.action_change) else "Pick a group"
+                    }
+                    venue.isNotBlank() -> {
+                        binding.groupCard.visibility = View.VISIBLE
+                        binding.groupSub.text = "Venue"
+                        binding.groupName.text = venue
+                        binding.buttonGroup.visibility = View.GONE
+                    }
+                    else -> binding.groupCard.visibility = View.GONE
+                }
+                if (!b.optBoolean("lab")) { askGroupOnce = false; return@post }
+                if (cur == null && askGroupOnce) {
+                    askGroupOnce = false
+                    GroupPickActivity.open(this, ask = true)
+                } else askGroupOnce = false
+            }
+        }.start()
     }
 
     override fun onPause() {
@@ -162,8 +226,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStatus() {
         val isOwner = deviceOwner.isDeviceOwner
-        binding.deviceName.text = deviceName()
-        binding.deviceSub.text = "Android ${Build.VERSION.RELEASE} · ${DeviceIdentity.serial(this)}"
+        val serial = DeviceIdentity.serial(this)
+        binding.badgeSerial.text = serial
+        binding.deviceName.text = listOf(deviceName(), role).filter { it.isNotBlank() }.joinToString(" · ")
+        renderQr(serial)
         styleTag(binding.headerTag, if (isOwner) "Managed" else "Not managed", if (isOwner) Tone.OK else Tone.WARN)
 
         val (tone, title, detail) = overallStatus(isOwner)
@@ -180,6 +246,9 @@ class MainActivity : AppCompatActivity() {
         binding.buttonCheckin.visibility = if (config.isConfigured) View.VISIBLE else View.GONE
 
         renderSetup(isOwner)
+        renderRows(binding.rowsConnection, connectionRows())
+        renderRows(binding.rowsHealth, healthRows())
+        renderRows(binding.rowsLock, lockRows())
         renderRows(binding.rowsManagement, managementRows(isOwner))
         renderRows(binding.rowsDevice, deviceRows())
         renderRows(binding.rowsPolicies, policyRows())
@@ -279,6 +348,44 @@ class MainActivity : AppCompatActivity() {
         add(Row("App configurations", if (configs == 0) "None" else plural(configs, "app")))
     }
 
+    // S3's three short cards; the full lists stay under Details.
+    private fun connectionRows(): List<Row> = buildList {
+        add(Row("Network", network()))
+        add(Row("Server", serverHost()))
+        if (config.isConfigured) add(Row("Link", if (AgentStatus.wsConnected) "Live" else "HTTP only",
+            if (AgentStatus.wsConnected) Tone.OK else Tone.WARN))
+    }
+
+    private fun healthRows(): List<Row> = buildList {
+        add(Row("Storage", storage()))
+        battery()?.let { add(Row("Battery", it)) }
+        add(Row("Up for", duration(SystemClock.elapsedRealtime())))
+    }
+
+    private fun lockRows(): List<Row> = buildList {
+        add(if (!config.kioskEnabled) Row("Lock", "Off", Tone.NEUTRAL) else Row("Lock", kiosk(), Tone.INFO))
+        add(Row("System updates", updatePolicy()))
+        add(Row("Agent", BuildConfig.VERSION_NAME))
+    }
+
+    /** The badge's QR: this device's page on the dashboard (signing in is needed to see it). */
+    private fun renderQr(serial: String) {
+        val base = config.serverUrl.trim().trimEnd('/')
+        if (base.isEmpty() || serial.isEmpty()) { binding.qrRow.visibility = View.GONE; return }
+        val url = "$base/devices/" + Uri.encode(serial)
+        if (url == qrFor) return
+        qrFor = url
+        runCatching {
+            val m = com.google.zxing.qrcode.QRCodeWriter().encode(url, com.google.zxing.BarcodeFormat.QR_CODE, 0, 0,
+                mapOf(com.google.zxing.EncodeHintType.MARGIN to 0))
+            val bmp = android.graphics.Bitmap.createBitmap(m.width, m.height, android.graphics.Bitmap.Config.ARGB_8888)
+            for (y in 0 until m.height) for (x in 0 until m.width) bmp.setPixel(x, y, if (m[x, y]) 0xFF1D1B20.toInt() else 0xFFFFFFFF.toInt())
+            binding.qrImage.setImageDrawable(android.graphics.drawable.BitmapDrawable(resources, bmp).apply { isFilterBitmap = false })
+            binding.qrHost.text = Uri.parse(base).host.orEmpty()
+            binding.qrRow.visibility = View.VISIBLE
+        }.onFailure { binding.qrRow.visibility = View.GONE }
+    }
+
     private fun renderRows(container: LinearLayout, rows: List<Row>) {
         if (rendered[container.id] == rows) return
         rendered[container.id] = rows
@@ -362,6 +469,11 @@ class MainActivity : AppCompatActivity() {
     /** Two columns side by side on a wide screen (a TV, a tablet in landscape), stacked on a phone. */
     private fun layoutColumns() {
         if (resources.configuration.screenWidthDp < 720) return
+        // S3: the badge beside the state and the short cards.
+        binding.top.orientation = LinearLayout.HORIZONTAL
+        binding.badge.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        binding.right.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            .apply { marginStart = dp(16) }
         binding.columns.orientation = LinearLayout.HORIZONTAL
         binding.col1.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             .apply { marginEnd = dp(16) }

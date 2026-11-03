@@ -18,8 +18,8 @@ android {
         applicationId = "aio.app.mdmclient.dpc"
         minSdk = 28
         targetSdk = 35
-        versionCode = 51
-        versionName = "0.13.6"
+        versionCode = 52
+        versionName = "0.14.0"
 
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"$mdmServerUrl\"")
         buildConfigField("String", "DEFAULT_API_KEY", "\"$mdmApiKey\"")
@@ -89,6 +89,7 @@ dependencies {
     // Transport: OkHttp gives us HTTP + WebSocket + gzip + retries, replacing the hand-rolled
     // RFC-6455 client used by the system-app client.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.zxing:core:3.5.3") // S3: the badge's QR to the dashboard page
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // Lightweight JSON via org.json (bundled in Android) — no extra dep needed for now.
