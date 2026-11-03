@@ -197,6 +197,20 @@ class CommandExecutor(
      * from the capture service, not from here.
      */
     private fun screenshot(id: String) {
+        // The accessibility service takes a still with no prompt (0.14.1); MediaProjection, the
+        // fallback, asks on the device every time on Android 14.
+        val a11y = aio.app.mdmclient.dpc.AgentBus.input as? aio.app.mdmclient.dpc.input.MdmAccessibilityService
+        if (a11y != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            a11y.screenshotPng { png, why ->
+                if (png != null) acker.ackCommand(id, "completed", output = android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP))
+                else { Log.w(TAG, "screenshot $id: $why, trying MediaProjection"); projectionScreenshot(id) }
+            }
+            return
+        }
+        projectionScreenshot(id)
+    }
+
+    private fun projectionScreenshot(id: String) {
         if (!Grants.projectMediaAllowed(ctx)) {
             // Still possible — it just needs the prompt — so this is a note, not a failure.
             Log.i(TAG, "screenshot $id: no PROJECT_MEDIA appop, the device will show the consent prompt")

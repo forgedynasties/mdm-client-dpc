@@ -230,7 +230,10 @@ class MainActivity : AppCompatActivity() {
         binding.badgeSerial.text = serial
         binding.deviceName.text = listOf(deviceName(), role).filter { it.isNotBlank() }.joinToString(" · ")
         renderQr(serial)
-        styleTag(binding.headerTag, if (isOwner) "Managed" else "Not managed", if (isOwner) Tone.OK else Tone.WARN)
+        styleTag(binding.headerTag, if (isOwner) "● Managed" else "Not managed", if (isOwner) Tone.OK else Tone.WARN)
+        // On the badge's purple a tinted tag can't be read (0.14.0): white on a light veil.
+        binding.headerTag.setTextColor(if (isOwner) 0xFFFFFFFF.toInt() else 0xFFFFD27A.toInt())
+        binding.headerTag.background = GradientDrawable().apply { cornerRadius = dp(40).toFloat(); setColor(0x2EFFFFFF) }
 
         val (tone, title, detail) = overallStatus(isOwner)
         (binding.statusDot.background as? GradientDrawable ?: GradientDrawable().apply {

@@ -355,6 +355,30 @@ class MdmAccessibilityService : AccessibilityService(), AgentBus.InputSink {
         return m
     }
 
+    /**
+     * A still screenshot as PNG through the accessibility service (0.14.1): no consent prompt,
+     * unlike MediaProjection, which Android 14 asks about on every capture ("Start recording or
+     * casting with AIO MDM?"). Android 11+; [done] gets the PNG, or null and why.
+     */
+    fun screenshotPng(done: (ByteArray?, String) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) { done(null, "needs Android 11"); return }
+        takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(shot: ScreenshotResult) {
+                Thread {
+                    val png = runCatching {
+                        shot.hardwareBuffer.use { hb ->
+                            val bmp = android.graphics.Bitmap.wrapHardwareBuffer(hb, shot.colorSpace)
+                                ?.copy(android.graphics.Bitmap.Config.ARGB_8888, false) ?: return@use null
+                            java.io.ByteArrayOutputStream().also { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+                        }
+                    }.getOrNull()
+                    done(png, if (png == null) "could not encode the screenshot" else "")
+                }.start()
+            }
+            override fun onFailure(errorCode: Int) { done(null, "accessibility screenshot failed (code $errorCode)") }
+        })
+    }
+
     companion object {
         private const val TAG = "MdmA11y"
         private const val TAP_SLOP = 16.0
