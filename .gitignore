@@ -21,3 +21,4 @@ agent-config.local.properties
 *.keystore
 
 keystore/
+.kotlin/

@@ -87,6 +87,12 @@ class ApkInstaller(private val ctx: Context, config: AgentConfig) {
     }
 
     internal fun commitInstall(apk: File): Result {
+        // A split APK bundle (.xapk and the like, 0.15.0) goes in as all its parts at once.
+        val parts = try {
+            ApkBundle.parts(apk)
+        } catch (e: IllegalArgumentException) {
+            return Result(false, e.message ?: "not an installable bundle")
+        }
         val pi = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -94,9 +100,21 @@ class ApkInstaller(private val ctx: Context, config: AgentConfig) {
         }
         val sessionId = pi.createSession(params)
         pi.openSession(sessionId).use { session ->
-            session.openWrite("base.apk", 0, apk.length()).use { out ->
-                apk.inputStream().use { it.copyTo(out) }
-                session.fsync(out)
+            if (parts == null) {
+                session.openWrite("base.apk", 0, apk.length()).use { out ->
+                    apk.inputStream().use { it.copyTo(out) }
+                    session.fsync(out)
+                }
+            } else {
+                java.util.zip.ZipFile(apk).use { zip ->
+                    for (name in parts) {
+                        val e = zip.getEntry(name)
+                        session.openWrite(name, 0, e.size).use { out ->
+                            zip.getInputStream(e).use { it.copyTo(out) }
+                            session.fsync(out)
+                        }
+                    }
+                }
             }
             val result = awaitSessionResult(sessionId) { intentSender ->
                 session.commit(intentSender)
