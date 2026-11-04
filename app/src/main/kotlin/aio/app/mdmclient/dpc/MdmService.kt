@@ -91,7 +91,7 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
         super.onCreate()
         config = AgentConfig.get(this)
         deviceOwner = DeviceOwner(this)
-        api = ApiClient(config).also { it.onUnauthorized = { onUnauthorized() } }
+        api = ApiClient(config).also { it.onUnauthorized = { onUnauthorized() }; it.onAuthorized = { rejectedSince = 0L; rejections = 0 } }
         ws = WsClient(config, this)
         executor = CommandExecutor(this, deviceOwner, this, lifecycleScope)
         adbTunnel = AdbTunnel(config)
@@ -156,7 +156,22 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
      * repeats a 401 forever, which is exactly what it did after the onboarding screen
      * cleared a working key.
      */
+    // One 401 is not proof the key is gone (0.15.1, 4 Nov 2026): a server that could not
+    // reach its database answered 401 on 29 Oct, an HK1 box dropped a good key on it, and
+    // its enrollment token had expired, so it never got back in. The key goes only after
+    // three rejections in a row spanning at least 10 minutes, with no call let through between.
+    @Volatile private var rejections = 0
+    @Volatile private var rejectedSince = 0L
+
     fun onUnauthorized() {
+        val now = System.currentTimeMillis()
+        if (rejections == 0) rejectedSince = now
+        rejections++
+        if (rejections < 3 || now - rejectedSince < 10 * 60_000L) {
+            Log.w(TAG, "Device key rejected ($rejections in a row) — keeping it for now")
+            return
+        }
+        rejections = 0
         val token = config.enrollToken.ifBlank { config.lastEnrollToken }
         if (token.isBlank()) return
         Log.w(TAG, "Device key rejected — re-enrolling with the token this device came with")

@@ -20,6 +20,8 @@ class ApiClient(private val config: AgentConfig) {
 
     /** Called when the server rejects our key, so the service can enroll again. */
     var onUnauthorized: (() -> Unit)? = null
+    /** Any authenticated call that went through: the key is good (resets the 401 count). */
+    var onAuthorized: (() -> Unit)? = null
 
     /** Why the last request failed, for the status screen ("HTTP 502", a network error). */
     @Volatile var lastError: String = ""
@@ -83,6 +85,7 @@ class ApiClient(private val config: AgentConfig) {
             http.newCall(req).execute().use { resp ->
                 when {
                     resp.isSuccessful -> {
+                        onAuthorized?.invoke()
                         val text = resp.body?.string().orEmpty()
                         if (text.isBlank()) JSONObject() else JSONObject(text)
                     }
@@ -127,6 +130,7 @@ class ApiClient(private val config: AgentConfig) {
                 http.newCall(req).execute().use { resp ->
                     when {
                         resp.isSuccessful -> {
+                            onAuthorized?.invoke()
                             val text = resp.body?.string().orEmpty()
                             return if (text.isBlank()) JSONObject() else JSONObject(text)
                         }
