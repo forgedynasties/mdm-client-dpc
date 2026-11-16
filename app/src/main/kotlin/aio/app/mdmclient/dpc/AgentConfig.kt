@@ -41,6 +41,31 @@ class AgentConfig private constructor(private val ctx: Context) {
 
     /** The enrollment token this device last exchanged for a key, so re-saving the same
      *  token (it stays in the onboarding field) cannot wipe the key it bought. */
+    // A move to another server not yet proven (0.15.2): where the device came from, so it can
+    // go back if the new server never accepts a call within MOVE_CONFIRM_MS. moveAtMs = 0 when
+    // no move is pending. moveReverted is the report for the old server (JSON), sent with
+    // the next check-in there and then cleared.
+    var movedFromUrl: String
+        get() = prefs.getString(KEY_MOVED_FROM_URL, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_MOVED_FROM_URL, value).apply()
+    var movedFromKey: String
+        get() = prefs.getString(KEY_MOVED_FROM_KEY, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_MOVED_FROM_KEY, value).apply()
+    var movedFromToken: String
+        get() = prefs.getString(KEY_MOVED_FROM_TOKEN, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_MOVED_FROM_TOKEN, value).apply()
+    var moveAtMs: Long
+        get() = prefs.getLong(KEY_MOVE_AT, 0L)
+        set(value) = prefs.edit().putLong(KEY_MOVE_AT, value).apply()
+    var moveReverted: String
+        get() = prefs.getString(KEY_MOVE_REVERTED, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_MOVE_REVERTED, value).apply()
+
+    fun clearPendingMove() {
+        prefs.edit().remove(KEY_MOVED_FROM_URL).remove(KEY_MOVED_FROM_KEY)
+            .remove(KEY_MOVED_FROM_TOKEN).remove(KEY_MOVE_AT).apply()
+    }
+
     var lastEnrollToken: String
         get() = prefs.getString(KEY_LAST_ENROLL_TOKEN, "")!!
         set(value) = prefs.edit().putString(KEY_LAST_ENROLL_TOKEN, value.trim()).apply()
@@ -244,6 +269,11 @@ class AgentConfig private constructor(private val ctx: Context) {
         private const val KEY_ENROLL_TOKEN = "enroll_token"
         private const val KEY_ENROLL_SUMMARY = "enroll_summary"
         private const val KEY_LAST_ENROLL_TOKEN = "last_enroll_token"
+        private const val KEY_MOVED_FROM_URL = "moved_from_url"
+        private const val KEY_MOVED_FROM_KEY = "moved_from_key"
+        private const val KEY_MOVED_FROM_TOKEN = "moved_from_token"
+        private const val KEY_MOVE_AT = "move_at_ms"
+        private const val KEY_MOVE_REVERTED = "move_reverted"
         private const val KEY_CHECKIN_INTERVAL = "checkin_interval"
         private const val KEY_KIOSK_ENABLED = "kiosk_enabled"
         private const val KEY_KIOSK_PACKAGE = "kiosk_package"

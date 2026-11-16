@@ -357,6 +357,12 @@ class CommandExecutor(
             }
             acker.ackCommand(id, "completed", output = "moved to $target")
             delay(3_000) // let the ack leave over this server's socket before it closes
+            // Remember where it came from (0.15.2): if the new server never accepts a call
+            // within MdmService.MOVE_CONFIRM_MS, the device goes back there by itself.
+            config.movedFromUrl = config.serverUrl
+            config.movedFromKey = config.apiKey
+            config.movedFromToken = config.lastEnrollToken
+            config.moveAtMs = System.currentTimeMillis()
             config.serverUrl = target
             config.apiKey = key
             config.enrollToken = ""

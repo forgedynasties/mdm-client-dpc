@@ -91,7 +91,7 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
         super.onCreate()
         config = AgentConfig.get(this)
         deviceOwner = DeviceOwner(this)
-        api = ApiClient(config).also { it.onUnauthorized = { onUnauthorized() }; it.onAuthorized = { rejectedSince = 0L; rejections = 0 } }
+        api = ApiClient(config).also { it.onUnauthorized = { onUnauthorized() }; it.onAuthorized = { rejectedSince = 0L; rejections = 0; confirmMove() } }
         ws = WsClient(config, this)
         executor = CommandExecutor(this, deviceOwner, this, lifecycleScope)
         adbTunnel = AdbTunnel(config)
@@ -164,6 +164,12 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
     @Volatile private var rejectedSince = 0L
 
     fun onUnauthorized() {
+        // During a move not yet proven, a refusal is the new server's problem, not a lost key:
+        // the move goes back to the old server instead (maybeRevertMove).
+        if (config.moveAtMs > 0L) {
+            Log.w(TAG, "Refused by ${config.serverUrl} during a move — keeping the key, the move may go back")
+            return
+        }
         val now = System.currentTimeMillis()
         if (rejections == 0) rejectedSince = now
         rejections++
@@ -223,6 +229,52 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
             enrolling = false
             AgentStatus.enrolling = false
         }
+    }
+
+    // ---- Move to another server: proven, or back (0.15.2) ----
+
+    /** The new server accepted a call: the move is proven and there is no going back. */
+    private fun confirmMove() {
+        val at = config.moveAtMs
+        // A call to the OLD server still in flight at the switch must not count: only from
+        // 15 s on, when the old connection is gone, does an accepted call prove the new one.
+        if (at == 0L || System.currentTimeMillis() - at < 15_000L) return
+        Log.i(TAG, "Move to ${config.serverUrl} confirmed")
+        config.clearPendingMove()
+    }
+
+    /**
+     * A move nobody has confirmed after MOVE_CONFIRM_MS goes back to the server the device
+     * came from, with the key it had there, and says why on its next check-in. Without this a
+     * device moved to a server that then refused it could only be fixed by hand, on site.
+     * Returns true when it went back (the service restarts on the old server).
+     */
+    private fun maybeRevertMove(): Boolean {
+        val at = config.moveAtMs
+        if (at == 0L || System.currentTimeMillis() - at < MOVE_CONFIRM_MS) return false
+        val from = config.movedFromUrl
+        val key = config.movedFromKey
+        if (from.isBlank() || key.isBlank()) {
+            config.clearPendingMove() // nothing to go back to
+            return false
+        }
+        val to = config.serverUrl
+        val why = api.lastError.ifBlank { "no answer" }
+        Log.w(TAG, "Move to $to not confirmed in ${MOVE_CONFIRM_MS / 60_000} min ($why) — going back to $from")
+        config.moveReverted = JSONObject()
+            .put("to", to).put("moved_at_ms", at).put("reverted_at_ms", System.currentTimeMillis())
+            .put("reason", why).toString()
+        config.serverUrl = from
+        config.apiKey = key
+        config.lastEnrollToken = config.movedFromToken
+        config.enrollToken = ""
+        config.enrollSummary = "Back on " + (android.net.Uri.parse(from).host ?: from) + " (move did not take)"
+        config.clearPendingMove()
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            stopService(Intent(this, MdmService::class.java))
+            start(this)
+        }
+        return true
     }
 
     // ---- Transport lifecycle ----
@@ -410,6 +462,7 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
         lifecycleScope.launch(Dispatchers.IO) {
             while (isActive && wantConnected) {
                 lastProgressAtMs = SystemClock.elapsedRealtime()
+                if (maybeRevertMove()) break
                 val httpDue = SystemClock.elapsedRealtime() - lastHttpCheckinAt >= HTTP_SAFETY_NET_MS
                 // The app list only travels in an HTTP check-in. Until the server has it
                 // (first check-in failed, or it asked again with send_apps), check in over
@@ -428,8 +481,12 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
         val currentHash = Telemetry.appsHash(this)
         val includeApps = currentHash != lastKnownAppsHash
         val payload = Telemetry.buildCheckin(this, includeApps)
+        // A move that went back tells the server it came back to, once (0.15.2).
+        val reverted = config.moveReverted
+        if (reverted.isNotEmpty()) runCatching { payload.optJSONObject("extra")?.put("move_reverted", JSONObject(reverted)) }
         lastHttpCheckinAt = SystemClock.elapsedRealtime()
         val resp = api.checkin(payload)
+        if (resp != null && reverted.isNotEmpty() && config.moveReverted == reverted) config.moveReverted = ""
         AgentStatus.checkinResult(resp != null, api.lastError)
         Notices.refreshStatus(this@MdmService)
         lastCheckinOk = resp != null
@@ -451,6 +508,7 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
     // ---- WsClient.Listener ----
 
     override fun onOpen() {
+        confirmMove() // the server took this key: a move to it is proven
         AgentStatus.wsConnected = true
         Notices.refreshStatus(this@MdmService)
         reconnectAttempt = 0
@@ -649,6 +707,8 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
     }
 
     companion object {
+        /** How long a move to another server may go unconfirmed before it goes back (0.15.2). */
+        const val MOVE_CONFIRM_MS = 10 * 60_000L
         /** How often to look at `lost_listen` while there is nothing to listen for. */
         private const val BLE_IDLE_CHECK_MS = 30_000L
         private const val TAG = "MdmService"
