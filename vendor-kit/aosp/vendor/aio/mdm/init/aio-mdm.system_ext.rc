@@ -1,0 +1,12 @@
+# AIO MDM: make the AIO MDM agent the Device Owner once the system has booted.
+# Runs once per factory reset (the script leaves a mark in /data/local/tmp).
+# Same domain and user as the AOSP "console" service: no SELinux change is needed.
+service aio_mdm_setup /system/bin/sh /system_ext/etc/aio-mdm/aio-mdm-setup.sh
+    user shell
+    group shell
+    seclabel u:r:shell:s0
+    disabled
+    oneshot
+
+on property:sys.boot_completed=1
+    start aio_mdm_setup

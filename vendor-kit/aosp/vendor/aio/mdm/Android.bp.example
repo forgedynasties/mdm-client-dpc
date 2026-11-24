@@ -1,0 +1,22 @@
+// OPTIONAL. Use this only if your tree does not accept Android.mk (Android 12+).
+// Rename to Android.bp and DELETE Android.mk (both together = duplicate module error).
+// aio-mdm.mk adds "AioMdm" for the default system partition; for product or system_ext,
+// set the matching line below and keep AIO_MDM_PARTITION in aio-mdm.mk the same.
+
+android_app_import {
+    name: "AioMdm",
+    apk: "AioMdm.apk",
+
+    // Signed by AIO: the build must not touch it. preprocessed implies presigned and makes
+    // the build only check alignment and that the dex is stored uncompressed (it is).
+    // On Android 10/11 trees without "preprocessed", use `presigned: true` instead.
+    preprocessed: true,
+
+    privileged: true,
+    dex_preopt: {
+        enabled: false,
+    },
+
+    // product_specific: true,      // -> /product/priv-app
+    // system_ext_specific: true,   // -> /system_ext/priv-app
+}

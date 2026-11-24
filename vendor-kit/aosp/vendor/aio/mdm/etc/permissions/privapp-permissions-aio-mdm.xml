@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Privileged permissions for the AIO MDM agent (Android 8+).
+
+  On Android 9+ with ro.control_privapp_permissions=enforce, a priv-app that requests a
+  privileged permission missing from this list STOPS THE DEVICE FROM BOOTING. Keep this file
+  next to the APK, in the same partition (system / product / system_ext).
+
+  The first group is what this APK version requests. The second group is reserved for later
+  versions of the agent, which update themselves over the air; listing a permission the APK
+  does not request is harmless.
+-->
+<permissions>
+    <privapp-permissions package="aio.app.mdmclient.dpc">
+        <!-- requested now -->
+        <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE"/>
+        <permission name="android.permission.READ_LOGS"/>
+        <permission name="android.permission.PACKAGE_USAGE_STATS"/>
+        <permission name="android.permission.WRITE_SECURE_SETTINGS"/>
+
+        <!-- reserved for later agent versions -->
+        <permission name="android.permission.REBOOT"/>
+        <permission name="android.permission.INSTALL_PACKAGES"/>
+        <permission name="android.permission.DELETE_PACKAGES"/>
+        <permission name="android.permission.CHANGE_COMPONENT_ENABLED_STATE"/>
+        <permission name="android.permission.BATTERY_STATS"/>
+        <permission name="android.permission.DUMP"/>
+        <permission name="android.permission.READ_DROPBOX_DATA"/>
+        <permission name="android.permission.LOCAL_MAC_ADDRESS"/>
+        <permission name="android.permission.INTERACT_ACROSS_USERS"/>
+    </privapp-permissions>
+</permissions>

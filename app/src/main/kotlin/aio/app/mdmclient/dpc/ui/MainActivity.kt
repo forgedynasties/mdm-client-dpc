@@ -90,14 +90,12 @@ class MainActivity : AppCompatActivity() {
         binding.buttonSettings.setOnClickListener {
             runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) }
         }
-        binding.buttonGroup.setOnClickListener { GroupPickActivity.open(this, ask = false) }
         binding.buttonDetails.setOnClickListener {
             val show = binding.columns.visibility != View.VISIBLE
             binding.columns.visibility = if (show) View.VISIBLE else View.GONE
             binding.buttonDetails.text = getString(if (show) R.string.action_hide_details else R.string.action_details)
             if (show) binding.scroll.post { binding.scroll.smoothScrollTo(0, binding.columns.top) }
         }
-        askGroupOnce = savedInstanceState == null
         binding.footer.text = "AIO MDM agent ${BuildConfig.VERSION_NAME} · aioapp.com"
         binding.buttonCheckin.requestFocus()
 
@@ -154,13 +152,9 @@ class MainActivity : AppCompatActivity() {
         loadGroup()
     }
 
-    // ── Group (G3, picked 3 Nov 2026) ──────────────────────────────────────────────
-    // A Lab device shows its group in a card with Change; while it has none, opening the app
-    // opens the picker once ("Which team is this device for?", Not now). At a venue, or before
-    // enrollment, the card stays hidden.
-
-    /** Ask for a group on this launch of the screen (not on every resume, so Not now sticks). */
-    private var askGroupOnce = false
+    // ── Where it is ─────────────────────────────────────────────────────────────────
+    // A venue device shows its venue in a card; a Lab device says "Lab". There is no group to
+    // pick on the device any more (0.16.1, 24 Nov 2026): a group is set from the dashboard.
 
     /** The device's role as the MDM names it ("POS terminal"), for the badge; "" until known. */
     private var role = ""
@@ -179,28 +173,19 @@ class MainActivity : AppCompatActivity() {
                 val b = answer.body ?: return@post
                 role = b.optString("role")
                 val venue = b.optString("venue")
-                val cur = b.optJSONObject("current")
                 when {
                     b.optBoolean("lab") -> {
                         binding.groupCard.visibility = View.VISIBLE
-                        binding.groupSub.text = "Lab · group"
-                        binding.groupName.text = cur?.optString("name") ?: "No group yet"
-                        binding.buttonGroup.visibility = View.VISIBLE
-                        binding.buttonGroup.text = if (cur != null) getString(R.string.action_change) else "Pick a group"
+                        binding.groupSub.text = "Where it is"
+                        binding.groupName.text = "Lab"
                     }
                     venue.isNotBlank() -> {
                         binding.groupCard.visibility = View.VISIBLE
                         binding.groupSub.text = "Venue"
                         binding.groupName.text = venue
-                        binding.buttonGroup.visibility = View.GONE
                     }
                     else -> binding.groupCard.visibility = View.GONE
                 }
-                if (!b.optBoolean("lab")) { askGroupOnce = false; return@post }
-                if (cur == null && askGroupOnce) {
-                    askGroupOnce = false
-                    GroupPickActivity.open(this, ask = true)
-                } else askGroupOnce = false
             }
         }.start()
     }

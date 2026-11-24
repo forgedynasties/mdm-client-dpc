@@ -1,0 +1,15 @@
+# OPTIONAL — only if you want the AIO dashboard to show the CPU temperature.
+#
+# The agent runs in the priv_app domain (privileged, not platform-signed). Many boards label
+# /sys/class/thermal as sysfs_thermal but do not let apps read it, so the agent reports no
+# CPU temperature. Add these two lines to your device sepolicy (BOARD_VENDOR_SEPOLICY_DIRS
+# on Android 8+, or BOARD_SEPOLICY_DIRS before that).
+#
+# If your tree has no sysfs_thermal type, label the thermal zones first, e.g. in
+# genfs_contexts:  genfscon sysfs /class/thermal u:object_r:sysfs_thermal:s0
+#                  genfscon sysfs /devices/virtual/thermal u:object_r:sysfs_thermal:s0
+#
+# If a neverallow rule blocks this on your tree, skip this file: everything else works.
+
+allow priv_app sysfs_thermal:dir r_dir_perms;
+allow priv_app sysfs_thermal:file r_file_perms;

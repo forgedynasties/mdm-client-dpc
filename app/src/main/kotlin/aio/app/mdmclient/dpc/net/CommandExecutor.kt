@@ -73,6 +73,7 @@ class CommandExecutor(
             "wifi_config" -> wifiConfig(id, payload)
             "pull_apk" -> pullApk(id, payload)
             "move_server" -> moveServer(id, payload)
+            "adb_approve" -> adbApprove(id, payload)
 
             "update_splash" -> unsupported(id, "boot splash requires system partition access")
             else -> unsupported(id, "unknown command type: $type")
@@ -493,6 +494,24 @@ class CommandExecutor(
 
     private fun notYetImplemented(id: String, type: String) {
         acker.ackCommand(id, "failed", output = "'$type' not implemented yet")
+    }
+
+    /**
+     * adb_approve {fingerprint, always, wait_s} (0.16.1): press Allow on Android's adb approval
+     * dialog for that key, on whichever display it opened (see MdmAccessibilityService.approveAdb).
+     * A repeat of the same command while it waits is ignored.
+     */
+    private val approvals = Collections.synchronizedSet(mutableSetOf<String>())
+
+    private fun adbApprove(id: String, payload: JSONObject) {
+        val a11y = aio.app.mdmclient.dpc.AgentBus.input as? aio.app.mdmclient.dpc.input.MdmAccessibilityService
+        if (a11y == null) { acker.ackCommand(id, "failed", output = "the accessibility service is off on this device"); return }
+        if (!approvals.add(id)) return
+        val wait = payload.optInt("wait_s", 60).coerceIn(5, 240)
+        acker.ackCommand(id, "running", progress = 0)
+        a11y.approveAdb(payload.optString("fingerprint"), payload.optBoolean("always", true), wait * 1000L) { ok, what ->
+            acker.ackCommand(id, if (ok) "completed" else "failed", output = what)
+        }
     }
 
     private fun unsupported(id: String, reason: String) {

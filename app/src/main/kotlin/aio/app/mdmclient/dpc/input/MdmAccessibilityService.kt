@@ -212,6 +212,79 @@ class MdmAccessibilityService : AccessibilityService(), AgentBus.InputSink {
             }
         }
     }
+    // ---- Approving an adb key from the dashboard (0.16.1, 18 Nov 2026) ----
+    // Android asks "Allow USB debugging?" on the device for every new computer, and only a
+    // system app can write the key itself. On a two-screen POS (Sunmi D3 Pro) that dialog
+    // opens where the remote screen does not show it, so nobody away from the device could
+    // answer. The command adb_approve names the computer's key fingerprint; we look for
+    // Android's dialog on every display and press Allow only when it shows that fingerprint.
+    // Never by itself: approving whatever asks would hand adb to anyone on the venue's Wi-Fi.
+
+    private var approving = false
+
+    /** Letters and digits only, upper case: "ab:cd" and "AB CD" compare equal. */
+    private fun bare(s: String) = s.filter { it.isLetterOrDigit() }.uppercase()
+
+    private fun allWindows(): List<Pair<Int, android.view.accessibility.AccessibilityWindowInfo>> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val all = windowsOnAllDisplays
+            return (0 until all.size()).flatMap { i -> all.valueAt(i).map { all.keyAt(i) to it } }
+        }
+        return windows.map { android.view.Display.DEFAULT_DISPLAY to it }
+    }
+
+    private fun textOf(n: android.view.accessibility.AccessibilityNodeInfo?, into: StringBuilder, depth: Int = 0) {
+        if (n == null || depth > 12) return
+        n.text?.let { into.append(it).append(' ') }
+        for (i in 0 until n.childCount) textOf(n.getChild(i), into, depth + 1)
+    }
+
+    /**
+     * Wait up to [waitMs] for Android's adb approval dialog showing [expect] (the key's
+     * fingerprint; for the wireless debugging dialog, the network's BSSID) and press Allow,
+     * ticking "Always allow" first when [always]. [done] gets whether it was pressed and a
+     * sentence: the display it was on, or what was on screen instead.
+     */
+    fun approveAdb(expect: String, always: Boolean, waitMs: Long, done: (Boolean, String) -> Unit) {
+        val want = bare(expect)
+        if (want.length < 8) { done(false, "no key fingerprint given"); return }
+        main.post {
+            if (approving) { done(false, "another approval is still waiting on this device"); return@post }
+            approving = true
+            val until = SystemClock.elapsedRealtime() + waitMs
+            val tick = object : Runnable {
+                override fun run() {
+                    var other = ""
+                    val seen = StringBuilder()
+                    for ((display, w) in runCatching { allWindows() }.getOrDefault(emptyList())) {
+                        val root = runCatching { w.root }.getOrNull() ?: continue
+                        val pkg = root.packageName?.toString().orEmpty()
+                        seen.append("display ").append(display).append(": ").append(pkg).append("; ")
+                        val allow = root.findAccessibilityNodeInfosByViewId("android:id/button1").firstOrNull() ?: continue
+                        val box = root.findAccessibilityNodeInfosByViewId("$pkg:id/alwaysUse").firstOrNull() ?: continue
+                        val text = StringBuilder().also { textOf(root, it) }.toString().trim()
+                        if (!bare(text).contains(want)) { other = "display $display asks about something else: ${text.take(200)}"; continue }
+                        if (always && box.isCheckable && !box.isChecked) box.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+                        val pressed = allow.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+                        approving = false
+                        Log.i(TAG, "adb approval on display $display: pressed=$pressed")
+                        done(pressed, if (pressed) "Allowed on display $display" + (if (always) ", always for this computer" else "")
+                            else "found the dialog on display $display but it did not take the press")
+                        return
+                    }
+                    if (SystemClock.elapsedRealtime() >= until) {
+                        approving = false
+                        done(false, if (other.isNotEmpty()) other
+                            else "no approval dialog appeared in ${waitMs / 1000} s (connect from the computer while this waits). On screen: ${seen.toString().take(400)}")
+                        return
+                    }
+                    main.postDelayed(this, 500)
+                }
+            }
+            tick.run()
+        }
+    }
+
     override fun onInterrupt() { /* no-op */ }
 
     override fun handle(event: JSONObject) {

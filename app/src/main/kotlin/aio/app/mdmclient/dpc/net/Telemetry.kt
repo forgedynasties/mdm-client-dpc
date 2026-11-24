@@ -1,5 +1,6 @@
 package aio.app.mdmclient.dpc.net
 
+import aio.app.mdmclient.dpc.FactoryConfig
 import aio.app.mdmclient.dpc.kiosk.StaffMode
 import android.app.ActivityManager
 import android.content.Context
@@ -134,6 +135,8 @@ object Telemetry {
             // A Device Owner installs without a prompt, so an agent update never needs
             // anyone at the device. The dashboard words the update button from this.
             put("self_update_silent", true)
+            // Built into the vendor's system image (vendor kit) rather than installed over adb.
+            put("preinstalled", FactoryConfig.preinstalled(ctx))
             put("capabilities", JSONArray(Capabilities.supported(ctx)))
             // Degraded = works with limits (consent, reduced scope). The dashboard shows
             // these as "limited" instead of hiding them.

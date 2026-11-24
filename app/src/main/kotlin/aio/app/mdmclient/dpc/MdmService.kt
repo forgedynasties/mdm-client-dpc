@@ -143,6 +143,8 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
 
     /** Connect if configured; if we only hold an enrollment token, exchange it first. */
     private fun maybeStart() {
+        // A vendor image may carry the server and an enrollment token (FactoryConfig).
+        if (!config.isConfigured && !config.needsEnrollment) FactoryConfig.seedIfFresh(config)
         when {
             config.isConfigured -> startTransport()
             config.needsEnrollment -> enrollThenStart()

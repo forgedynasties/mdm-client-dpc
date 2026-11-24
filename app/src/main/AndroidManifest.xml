@@ -12,6 +12,10 @@
     <!-- Hardware serial (Build.getSerial) so devices identify by the label serial like the
          in-house fleet; the Device Owner self-grants this at service start -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- Preinstalled as a privileged app (vendor kit): the serial is readable before the
+         Device Owner is set, so a factory enrollment uses the label serial, never android-… -->
+    <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- Location telemetry (runtime grants are self-issued via Device Owner policy
          when the server enables location reporting; nothing is collected otherwise) -->
@@ -80,12 +84,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Lab devices: pick this device's group (G3, 3 Nov 2026) -->
-        <activity
-            android:name=".ui.GroupPickActivity"
-            android:exported="false"
-            android:theme="@style/Theme.MdmAgent" />
 
         <!-- Managed provisioning (QR / zero-touch) on Android 12+: the setup wizard asks
              the DPC for its provisioning mode, then hands over for policy compliance

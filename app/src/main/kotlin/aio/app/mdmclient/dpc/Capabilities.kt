@@ -70,7 +70,11 @@ object Capabilities {
         return if (radio.canAdvertise) listOf("ble_listen", "ble_beacon") else listOf("ble_listen")
     }
 
-    fun supported(ctx: Context): List<String> = base + bluetooth(ctx) + upgraded(ctx).filterValues { it }.keys
+    /** Pressing Allow on Android's adb approval dialog (adb_approve, 0.16.1): needs the accessibility service. */
+    private fun adbApprove(ctx: Context): List<String> =
+        if (Grants.accessibilityEnabled(ctx)) listOf("adb_approve") else emptyList()
+
+    fun supported(ctx: Context): List<String> = base + bluetooth(ctx) + adbApprove(ctx) + upgraded(ctx).filterValues { it }.keys
 
     fun degraded(ctx: Context): List<String> = upgraded(ctx).filterValues { !it }.keys.toList()
 

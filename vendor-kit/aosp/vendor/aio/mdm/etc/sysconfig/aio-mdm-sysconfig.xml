@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Keep the AIO MDM agent connected: no Doze / App Standby and no Data Saver limits for it.
+  It holds one WebSocket to the MDM server; without this a sleeping device stops answering.
+-->
+<config>
+    <allow-in-power-save package="aio.app.mdmclient.dpc"/>
+    <allow-in-data-usage-save package="aio.app.mdmclient.dpc"/>
+</config>
