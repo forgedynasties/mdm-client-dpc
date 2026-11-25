@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import aio.app.mdmclient.dpc.scout.NetScout
 import aio.app.mdmclient.dpc.kiosk.KioskState
 import aio.app.mdmclient.dpc.kiosk.StaffMode
 import aio.app.mdmclient.dpc.capture.ScreenCaptureConsentActivity
@@ -591,6 +592,18 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
             "logcat_request" -> lifecycleScope.launch(Dispatchers.IO) { logcat.oneShot(msg) }
             "start_logcat_stream" -> logcat.startStream(msg)
             "stop_logcat_stream" -> logcat.stopStream(msg.optString("request_id"))
+            // Scout (0.17.0): sweep the venue network for devices that trust the fleet adb
+            // key, and on the server's say-so enrol one (NetScout, the firmware client's copy).
+            // Frames back are dropped while the socket is down; the server retries a scan.
+            "net_scan" -> lifecycleScope.launch(Dispatchers.IO) {
+                try { NetScout.scan(this@MdmService, msg) { sendScoutFrame(it) } }
+                catch (e: Exception) { Log.e(TAG, "net_scan error: ${e.message}") }
+            }
+            "net_scan_cancel" -> NetScout.cancelScan(msg.optString("session"))
+            "net_enroll" -> lifecycleScope.launch(Dispatchers.IO) {
+                try { NetScout.enroll(this@MdmService, msg) { sendScoutFrame(it) } }
+                catch (e: Exception) { Log.e(TAG, "net_enroll error: ${e.message}") }
+            }
             else -> Log.d(TAG, "unhandled WS type=${msg.optString("type")}")
         }
     }
@@ -619,6 +632,10 @@ class MdmService : LifecycleService(), WsClient.Listener, Acker {
     // ---- Acker ----
 
     override fun sendWs(msg: JSONObject): Boolean = ws.send(msg)
+
+    private fun sendScoutFrame(frame: JSONObject) {
+        if (!ws.send(frame)) Log.w(TAG, "scout frame dropped (WS down)")
+    }
 
     override fun sendBinary(bytes: ByteString): Boolean = ws.sendBinary(bytes)
 

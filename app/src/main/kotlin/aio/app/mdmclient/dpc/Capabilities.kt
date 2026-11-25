@@ -43,6 +43,9 @@ object Capabilities {
         "move_fallback",
         // Split APK bundles (.xapk / .apks / .apkm): every part in one session (0.15.0).
         "apk_bundle",
+        // Scout: sweep the venue network and enrol devices that trust the fleet adb key
+        // (net_scan / net_enroll, scout/NetScout.java; 0.17.0).
+        "net_scout",
     )
 
     /**
