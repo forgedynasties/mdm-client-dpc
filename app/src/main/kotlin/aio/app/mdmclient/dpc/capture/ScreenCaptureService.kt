@@ -59,6 +59,15 @@ class ScreenCaptureService : Service() {
     private var sessionFps = 15
     private var sessionBitrate = 2_000_000
     private var sessionQuality = 70
+    // The video format of this session: H.264, or VP8 for browsers that have no H.264
+    // decoder (Zen, Edge on Linux; prototype 0.17.1, 25 Nov 2026).
+    private var sessionMime = MediaFormat.MIMETYPE_VIDEO_AVC
+    // Encode stats, logged every 5 s: frames out, encode delay (input to output), bytes.
+    private var statFrames = 0
+    private var statBytes = 0L
+    private var statDelaySumUs = 0L
+    private var statDelayMaxUs = 0L
+    private var statStartMs = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -122,6 +131,7 @@ class ScreenCaptureService : Service() {
 
         running = true
         sessionDpi = dpi; sessionFps = fps; sessionBitrate = bitrate; sessionQuality = quality
+        sessionMime = if (codecName == "vp8") MediaFormat.MIMETYPE_VIDEO_VP8 else MediaFormat.MIMETYPE_VIDEO_AVC
         if (codecName == "jpeg") {
             startJpeg(proj, w, h, dpi, fps, quality)
             Log.i(TAG, "capture started ${w}x$h @${fps}fps codec=jpeg")
@@ -133,7 +143,7 @@ class ScreenCaptureService : Service() {
             // The operator would otherwise sit on "Waking the device screen" for good: the
             // session is up but no frame ever comes. Stills are slower but always work, and
             // the dashboard tells the two apart per frame.
-            Log.w(TAG, "H.264 unavailable (${e.message}); streaming JPEG stills instead")
+            Log.w(TAG, "$sessionMime unavailable (${e.message}); streaming JPEG stills instead")
             releaseEncoder()
             val (jw, jh) = capLongSide(w, h, JPEG_FALLBACK_MAX)
             startJpeg(proj, jw, jh, dpi, fps, quality)
@@ -229,8 +239,8 @@ class ScreenCaptureService : Service() {
 
     /** Hardware H.264 (best on real devices) — VirtualDisplay -> MediaCodec input Surface. */
     private fun startH264(proj: MediaProjection, reqW: Int, reqH: Int, dpi: Int, fps: Int, bitrate: Int) {
-        val (name, w, h) = pickAvcEncoder(reqW, reqH)
-        Log.i(TAG, "H.264 encoder $name at ${w}x$h (asked ${reqW}x$reqH)")
+        val (name, w, h) = pickEncoder(sessionMime, reqW, reqH)
+        Log.i(TAG, "$sessionMime encoder $name at ${w}x$h (asked ${reqW}x$reqH)")
         val (enc, inputSurface) = configureEncoder(name, w, h, fps, bitrate)
         vdW = w; vdH = h
         virtualDisplay = proj.createVirtualDisplay(
@@ -242,12 +252,14 @@ class ScreenCaptureService : Service() {
 
     /** A started encoder and its input surface. Sets [codec] first so a failure releases it. */
     private fun configureEncoder(name: String, w: Int, h: Int, fps: Int, bitrate: Int): Pair<MediaCodec, Surface> {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+        val format = MediaFormat.createVideoFormat(sessionMime, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            if (sessionMime == MediaFormat.MIMETYPE_VIDEO_AVC) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             }
@@ -276,7 +288,7 @@ class ScreenCaptureService : Service() {
         codec = null
         configBytes = null
         try {
-            val (name, w, h) = pickAvcEncoder(vdW, vdH)
+            val (name, w, h) = pickEncoder(sessionMime, vdW, vdH)
             val (enc, surface) = configureEncoder(name, w, h, sessionFps, sessionBitrate)
             if (w != vdW || h != vdH) { vd.resize(w, h, sessionDpi); vdW = w; vdH = h }
             vd.surface = surface
@@ -368,6 +380,7 @@ class ScreenCaptureService : Service() {
                     if ((info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                         configBytes = bytes
                     } else {
+                        noteEncoded(info.presentationTimeUs, bytes.size)
                         val isKey = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
                         val cfg = if (isKey) (configBytes ?: ByteArray(0)) else ByteArray(0)
                         val frame = ByteArray(1 + cfg.size + bytes.size)
@@ -379,6 +392,33 @@ class ScreenCaptureService : Service() {
                 }
                 enc.releaseOutputBuffer(index, false)
             }
+        }
+    }
+
+    /**
+     * Encode stats for the VP8 trial: frames per second out of the encoder, how long a frame
+     * took from the screen to the encoder's output (the frame's own timestamp, which the
+     * virtual display sets from the monotonic clock), and the bytes. Logged every 5 s; read
+     * back with the device's log capture. Delay x fps over 1 s is the encoder's busy share.
+     */
+    private fun noteEncoded(ptsUs: Long, size: Int) {
+        val nowMs = android.os.SystemClock.uptimeMillis()
+        if (statStartMs == 0L) statStartMs = nowMs
+        val delayUs = System.nanoTime() / 1000 - ptsUs
+        if (delayUs in 0..5_000_000) {
+            statDelaySumUs += delayUs
+            if (delayUs > statDelayMaxUs) statDelayMaxUs = delayUs
+        }
+        statFrames++; statBytes += size
+        val span = nowMs - statStartMs
+        if (span >= 5000) {
+            val fps = statFrames * 1000.0 / span
+            val avgMs = if (statFrames > 0) statDelaySumUs / 1000.0 / statFrames else 0.0
+            Log.i(TAG, String.format(java.util.Locale.US,
+                "encode stats %s %s %dx%d: %.1f fps, delay avg %.1f ms max %.1f ms, %.0f kB/s, busy ~%.0f%%",
+                sessionMime, encoderName, vdW, vdH, fps, avgMs, statDelayMaxUs / 1000.0,
+                statBytes / 1024.0 * 1000 / span, avgMs * fps / 10))
+            statFrames = 0; statBytes = 0; statDelaySumUs = 0; statDelayMaxUs = 0; statStartMs = nowMs
         }
     }
 
@@ -448,8 +488,8 @@ class ScreenCaptureService : Service() {
      * OMX.rk encoder takes 1920x1088. Hardware first; each gets the asked size, or the
      * largest smaller one it accepts, aspect kept.
      */
-    private fun pickAvcEncoder(w: Int, h: Int): Triple<String, Int, Int> {
-        val avc = MediaFormat.MIMETYPE_VIDEO_AVC
+    private fun pickEncoder(mime: String, w: Int, h: Int): Triple<String, Int, Int> {
+        val avc = mime
         val encoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
             .filter { info -> info.isEncoder && info.supportedTypes.any { it.equals(avc, true) } }
             .filter { it.name !in badEncoders(this) }
@@ -459,7 +499,7 @@ class ScreenCaptureService : Service() {
             val size = fitSize(vc, w, h) ?: continue
             return Triple(info.name, size.first, size.second)
         }
-        throw IllegalStateException("no H.264 encoder takes ${w}x$h or smaller")
+        throw IllegalStateException("no $mime encoder takes ${w}x$h or smaller")
     }
 
     private fun isSoftware(info: MediaCodecInfo): Boolean =
