@@ -239,9 +239,28 @@ class ScreenCaptureService : Service() {
 
     /** Hardware H.264 (best on real devices) — VirtualDisplay -> MediaCodec input Surface. */
     private fun startH264(proj: MediaProjection, reqW: Int, reqH: Int, dpi: Int, fps: Int, bitrate: Int) {
-        val (name, w, h) = pickEncoder(sessionMime, reqW, reqH)
-        Log.i(TAG, "$sessionMime encoder $name at ${w}x$h (asked ${reqW}x$reqH)")
-        val (enc, inputSurface) = configureEncoder(name, w, h, fps, bitrate)
+        // Each encoder that takes the size, hardware first, until one configures: the RK3568's
+        // OMX.rk.video_encoder.avc lists 528x960 as supported and then refuses it
+        // (0x80001001, 25 Nov 2026, Sunmi D2s and rk3568_r), which sent every session there
+        // to JPEG stills although Codec2's software encoder works.
+        var started: Triple<MediaCodec, Surface, Pair<Int, Int>>? = null
+        var lastErr: Exception? = null
+        for ((name, cw, ch) in encoderCandidates(sessionMime, reqW, reqH)) {
+            Log.i(TAG, "$sessionMime encoder $name at ${cw}x$ch (asked ${reqW}x$reqH)")
+            try {
+                val (e, surf) = configureEncoder(name, cw, ch, fps, bitrate)
+                started = Triple(e, surf, cw to ch)
+                break
+            } catch (e: Exception) {
+                Log.w(TAG, "$name would not start (${e.message}); trying the next encoder")
+                runCatching { codec?.release() }
+                codec = null
+                lastErr = e
+            }
+        }
+        val (enc, inputSurface, size) = started
+            ?: throw (lastErr ?: IllegalStateException("no $sessionMime encoder takes ${reqW}x$reqH or smaller"))
+        val (w, h) = size
         vdW = w; vdH = h
         virtualDisplay = proj.createVirtualDisplay(
             "mdm-capture", w, h, dpi,
@@ -257,6 +276,12 @@ class ScreenCaptureService : Service() {
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            // The virtual display hands over every screen refresh (40-50 a second on a busy
+            // KDS); without a cap a software encoder falls behind and the picture lags by a
+            // second or more. KEY_FRAME_RATE is only a hint.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
+            }
             if (sessionMime == MediaFormat.MIMETYPE_VIDEO_AVC) {
                 setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
             }
@@ -399,7 +424,7 @@ class ScreenCaptureService : Service() {
      * Encode stats for the VP8 trial: frames per second out of the encoder, how long a frame
      * took from the screen to the encoder's output (the frame's own timestamp, which the
      * virtual display sets from the monotonic clock), and the bytes. Logged every 5 s; read
-     * back with the device's log capture. Delay x fps over 1 s is the encoder's busy share.
+     * back with the device's log capture.
      */
     private fun noteEncoded(ptsUs: Long, size: Int) {
         val nowMs = android.os.SystemClock.uptimeMillis()
@@ -415,9 +440,9 @@ class ScreenCaptureService : Service() {
             val fps = statFrames * 1000.0 / span
             val avgMs = if (statFrames > 0) statDelaySumUs / 1000.0 / statFrames else 0.0
             Log.i(TAG, String.format(java.util.Locale.US,
-                "encode stats %s %s %dx%d: %.1f fps, delay avg %.1f ms max %.1f ms, %.0f kB/s, busy ~%.0f%%",
+                "encode stats %s %s %dx%d: %.1f fps, delay avg %.1f ms max %.1f ms, %.0f kB/s",
                 sessionMime, encoderName, vdW, vdH, fps, avgMs, statDelayMaxUs / 1000.0,
-                statBytes / 1024.0 * 1000 / span, avgMs * fps / 10))
+                statBytes / 1024.0 * 1000 / span))
             statFrames = 0; statBytes = 0; statDelaySumUs = 0; statDelayMaxUs = 0; statStartMs = nowMs
         }
     }
@@ -488,8 +513,13 @@ class ScreenCaptureService : Service() {
      * OMX.rk encoder takes 1920x1088. Hardware first; each gets the asked size, or the
      * largest smaller one it accepts, aspect kept.
      */
-    private fun pickEncoder(mime: String, w: Int, h: Int): Triple<String, Int, Int> {
+    private fun pickEncoder(mime: String, w: Int, h: Int): Triple<String, Int, Int> =
+        encoderCandidates(mime, w, h).firstOrNull()
+            ?: throw IllegalStateException("no $mime encoder takes ${w}x$h or smaller")
+
+    private fun encoderCandidates(mime: String, w: Int, h: Int): List<Triple<String, Int, Int>> {
         val avc = mime
+        val out = mutableListOf<Triple<String, Int, Int>>()
         val encoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
             .filter { info -> info.isEncoder && info.supportedTypes.any { it.equals(avc, true) } }
             .filter { it.name !in badEncoders(this) }
@@ -497,9 +527,9 @@ class ScreenCaptureService : Service() {
         for (info in encoders) {
             val vc = runCatching { info.getCapabilitiesForType(avc).videoCapabilities }.getOrNull() ?: continue
             val size = fitSize(vc, w, h) ?: continue
-            return Triple(info.name, size.first, size.second)
+            out += Triple(info.name, size.first, size.second)
         }
-        throw IllegalStateException("no $mime encoder takes ${w}x$h or smaller")
+        return out
     }
 
     private fun isSoftware(info: MediaCodecInfo): Boolean =
