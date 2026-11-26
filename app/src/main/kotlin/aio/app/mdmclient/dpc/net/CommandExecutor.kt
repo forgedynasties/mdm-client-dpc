@@ -88,6 +88,13 @@ class CommandExecutor(
     /** Apply a server `config` frame/payload (kiosk etc.). Shared by WS config messages. */
     fun applyConfig(cfg: JSONObject) {
         config.applyServerConfig(cfg)
+        // The server's Lock switch (0.17.3): off means never lock, whatever else it says.
+        StaffMode.applyLockAllowed(ctx, if (cfg.has("lock_allowed")) cfg.optBoolean("lock_allowed", true) else null)
+        // Lost device switched off on the server: leave lost mode if still in it.
+        if (cfg.has("lost_allowed") && !cfg.optBoolean("lost_allowed", true) && config.lostOn) {
+            Log.i(TAG, "lost mode is switched off on the server: lifting it")
+            lostMode.exit()
+        }
         // Staff mode (0.10.0): the venue's staff PIN, the answer to an exit, and whether the
         // lock is back on at the server (which answers a re-lock done on the device).
         StaffMode.applyServer(

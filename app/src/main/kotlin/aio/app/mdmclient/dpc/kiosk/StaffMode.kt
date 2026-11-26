@@ -30,6 +30,7 @@ object StaffMode {
     private const val K_RELOCK_PKG = "relock_pkg"
     private const val K_FAILS = "fails"
     private const val K_LOCKOUT = "lockout_until"
+    private const val K_LOCK_OFF = "lock_off"      // the server says locking is switched off (0.17.3)
 
     const val DEFAULT_PIN = "147147"
     private const val MAX_FAILS = 5
@@ -48,6 +49,30 @@ object StaffMode {
     fun isOn(ctx: Context): Boolean = staffPackage(ctx).isNotEmpty()
     fun pendingExitAt(ctx: Context): Long = prefs(ctx).getLong(K_EXIT_AT, 0)
     fun pendingRelockAt(ctx: Context): Long = prefs(ctx).getLong(K_RELOCK_AT, 0)
+
+    /**
+     * The server has locking switched off (config lock_allowed false, 26 Nov 2026): the
+     * device is never locked, staff mode and a re-lock it set itself are dropped, and the
+     * pill, the corner and the D-pad code stay away. Before this, "Back to guest mode" kept a
+     * device locked until the server said kiosk_enabled true, which a server with locking off
+     * never says. Kept on the device so it holds offline and across reboots.
+     */
+    fun lockOff(ctx: Context): Boolean = prefs(ctx).getBoolean(K_LOCK_OFF, false)
+
+    /** The server's lock_allowed (null when an older server doesn't send it). */
+    fun applyLockAllowed(ctx: Context, allowed: Boolean?) {
+        if (allowed == null) return
+        val p = prefs(ctx)
+        if (allowed) {
+            if (p.getBoolean(K_LOCK_OFF, false)) p.edit().putBoolean(K_LOCK_OFF, false).apply()
+            return
+        }
+        val had = isOn(ctx) || pendingRelockAt(ctx) > 0
+        p.edit().putBoolean(K_LOCK_OFF, true)
+            .putString(K_PKG, "").putLong(K_RELOCK_AT, 0).putString(K_RELOCK_PKG, "").putLong(K_EXIT_AT, 0)
+            .commit()
+        if (had) onChange?.invoke()
+    }
 
     /** The server's offline_exit block (a venue PIN) and offline_exit_ack. */
     fun applyServer(ctx: Context, offlineExitPin: String?, ack: Long, kioskEnabled: Boolean?, venue: String? = null) {
@@ -71,6 +96,7 @@ object StaffMode {
      * lock, except while staff mode or a re-lock is still waiting for the server's answer.
      */
     fun lockedTo(ctx: Context, cfg: AgentConfig): List<String>? {
+        if (lockOff(ctx)) return null
         val relock = prefs(ctx).getString(K_RELOCK_PKG, "")!!
         // Our own package stands for the browser lock (it has no app of its own to name).
         if (pendingRelockAt(ctx) > 0 && relock.isNotEmpty()) return if (relock == ctx.packageName) emptyList() else listOf(relock)
@@ -115,6 +141,12 @@ object StaffMode {
     /** Back to guest mode: lock the app staff mode left, and say so until the server agrees. */
     fun backToGuest(ctx: Context): String {
         val pkg = staffPackage(ctx)
+        if (lockOff(ctx)) {
+            // Nothing to go back to: just leave staff mode.
+            prefs(ctx).edit().putString(K_PKG, "").putLong(K_EXIT_AT, 0).commit()
+            onChange?.invoke()
+            return ""
+        }
         prefs(ctx).edit()
             .putString(K_PKG, "")
             .putLong(K_RELOCK_AT, System.currentTimeMillis() / 1000)

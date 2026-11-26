@@ -91,8 +91,9 @@ class MdmAccessibilityService : AccessibilityService(), AgentBus.InputSink {
 
     private fun refreshStaffUi() {
         val lost = AgentConfig.get(this).lostOn
-        if (touch && locked() && !lost && !StaffMode.isOn(this)) addCorner() else removeCorner()
-        if (StaffMode.isOn(this) && !lost) addPill() else removePill()
+        val off = StaffMode.lockOff(this) // locking switched off on the server: no corner, no pill
+        if (touch && !off && locked() && !lost && !StaffMode.isOn(this)) addCorner() else removeCorner()
+        if (!off && StaffMode.isOn(this) && !lost) addPill() else removePill()
     }
 
     private fun overlayParams(w: Int, h: Int, gravity: Int, touchable: Boolean) = WindowManager.LayoutParams(
@@ -180,7 +181,7 @@ class MdmAccessibilityService : AccessibilityService(), AgentBus.InputSink {
     }
 
     private fun backToGuest() {
-        StaffMode.backToGuest(this)
+        StaffMode.backToGuest(this) // with the server's locking off this only ends staff mode
         KioskManager(this, DeviceOwner(this)).apply(AgentConfig.get(this))
         Log.i(TAG, "staff: back to guest mode")
     }
@@ -207,6 +208,7 @@ class MdmAccessibilityService : AccessibilityService(), AgentBus.InputSink {
         ) {
             keyLog.clear()
             when {
+                StaffMode.lockOff(this) -> {} // locking switched off on the server
                 StaffMode.isOn(this) -> main.post { backToGuest() }
                 locked() -> main.post { openPinPad() }
             }

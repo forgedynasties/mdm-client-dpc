@@ -102,8 +102,11 @@ class KioskHostActivity : Activity() {
             staff == packageName -> Intent(this, KioskBrowserActivity::class.java)
             staff.isNotEmpty() -> packageManager.getLaunchIntentForPackage(staff)
             else -> null
-        } ?: Intent(this, MainActivity::class.java)
+        } ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        // The lock came off: go to the launcher, not the agent's status screen, which
+        // staff took for an "MDM lock screen" (0.17.3). The status screen if that fails.
         runCatching { startActivity(next.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { runCatching { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
         finish()
     }
 
